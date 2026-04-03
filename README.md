@@ -4,6 +4,9 @@ An MLX-native implementation of the [TurboQuant](https://arxiv.org/abs/2412.0421
 
 ---
 
+<img width="1106" height="234" alt="Screenshot 2026-04-03 at 11 01 22 PM" src="https://github.com/user-attachments/assets/fb0ce269-6234-4ec1-9ab1-eca035a2d904" />
+
+
 ## What TurboQuant does - 
 
 When an LLM generates text it stores a **Key (K)** and **Value (V)** vector for every past token in every layer — the KV cache. At long contexts this dominates memory (hundreds of MB to GB on-device).
