@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+.DS_Store
+
+# Editors / tooling
+.idea/
+.vscode/
+.pytest_cache/
+.mypy_cache/
+
+# Bench / outputs
+results/*.json
+results/*.csv
+*.log
+
