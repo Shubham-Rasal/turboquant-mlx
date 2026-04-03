@@ -33,6 +33,7 @@ from .turboquant import (
     _Pack35,
     _next_pow2,
 )
+from . import metal_kernels as _mk
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +56,22 @@ def _compress_batch(
     scales : [n_kv_heads, L]          float16  (L2 norm of each vector)
     d_eff  : int                       padded-d stored by Pack35
     """
+    if _mk.HAS_METAL_KERNELS and abs(sq.bits - 3.5) < 1e-6:
+        try:
+            x32 = x.astype(mx.float32)
+            packed, scales = _mk.metal_quantize(
+                x32,
+                sq.boundaries.astype(mx.float32),
+                rot.signs.astype(mx.float32),
+                rot.d,
+                rot.d_pad,
+                rot.d_pad // 2,
+            )
+            d_eff = rot.d_pad if (rot.d_pad % 2 == 0) else rot.d_pad + 1
+            return packed, scales.astype(mx.float16), d_eff
+        except Exception:
+            pass
+
     # Per-vector L2 norm for normalisation; keepdims for broadcast
     scales = mx.sqrt(mx.sum(x * x, axis=-1))          # [n_kv_heads, L]
     x_norm = x / (scales[..., None] + 1e-8)           # unit-norm, [n_kv_heads, L, head_dim]
@@ -86,6 +103,21 @@ def _decompress_batch(
 
     Returns: [n_kv_heads, T, head_dim]
     """
+    if _mk.HAS_METAL_KERNELS and is_packed35:
+        try:
+            d_pack = int(packed.shape[-1])
+            return _mk.metal_dequantize(
+                packed,
+                scales,
+                sq.centroids.astype(mx.float32),
+                rot.signs.astype(mx.float32),
+                rot.d,
+                rot.d_pad,
+                d_pack,
+            )
+        except Exception:
+            pass
+
     if is_packed35:
         idx = _Pack35.unpack(packed, d_eff)                     # [n_kv_heads, T, d_eff]
     else:

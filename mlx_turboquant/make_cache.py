@@ -1,10 +1,15 @@
 """
-make_tq_cache(model) — build a list of TurboQuantKVCache objects (one per
-transformer layer) ready to pass to mlx_lm's generate_step as prompt_cache.
+make_tq_cache(model) — build a list of KVCache objects (one per transformer layer)
+ready to pass to mlx_lm's generate_step as prompt_cache.
+
+Layer-adaptive mode (fp16_layers > 0):
+    The first and last fp16_layers layers use the standard mlx_lm KVCache (full
+    precision). Middle layers use TurboQuantKVCache. This preserves quality on
+    smaller models where the first/last layers are most sensitive to quantization.
 """
 from __future__ import annotations
 
-from typing import List
+from typing import List, Union
 
 from .kv_cache import TurboQuantKVCache
 
@@ -24,30 +29,55 @@ def _get_kv_shape(attn) -> tuple[int, int]:
     return int(n_kv), int(head_dim)
 
 
+def _make_fp16_cache(model):
+    """Build a standard mlx_lm KVCache list (full precision) for all layers."""
+    from mlx_lm.models.cache import make_prompt_cache
+    return make_prompt_cache(model)
+
+
 def make_tq_cache(
     model,
     bits: float = 3.5,
     seed: int = 0,
     n_kv_heads: int | None = None,
     head_dim: int | None = None,
-) -> List[TurboQuantKVCache]:
+    fp16_layers: int = 0,
+) -> List[Union[TurboQuantKVCache, object]]:
     """
-    Build one TurboQuantKVCache per transformer layer.
+    Build one cache per transformer layer for use as ``prompt_cache``.
 
     Args:
-        model:       The loaded mlx_lm model (must expose model.model.layers).
-        bits:        Bits per coordinate for TurboQuantMSE (default 3.5).
-        seed:        Base RNG seed.
-        n_kv_heads:  Override if auto-detection fails.
-        head_dim:    Override if auto-detection fails.
+        model:        The loaded mlx_lm model (must expose model.model.layers).
+        bits:         Bits per coordinate for TurboQuantMSE (default 3.5).
+        seed:         Base RNG seed.
+        n_kv_heads:   Override auto-detection.
+        head_dim:     Override auto-detection.
+        fp16_layers:  Number of layers at the *start* and *end* of the network
+                      to keep in full FP16. Set to 1-4 to improve quality on
+                      smaller models (<= 7B). Default: 0 (all layers compressed).
 
     Returns:
-        List[TurboQuantKVCache] with len == number of layers, suitable for
-        passing as `prompt_cache` to mlx_lm.generate_step.
+        List of cache objects (TurboQuantKVCache or KVCache) suitable for
+        passing as ``prompt_cache`` to ``mlx_lm.generate_step``.
     """
     layers = model.model.layers
-    caches: List[TurboQuantKVCache] = []
+    n_layers = len(layers)
+
+    fp16_set: set[int] = set()
+    if fp16_layers > 0:
+        for i in range(min(fp16_layers, n_layers)):
+            fp16_set.add(i)
+        for i in range(max(0, n_layers - fp16_layers), n_layers):
+            fp16_set.add(i)
+
+    fp16_baseline = _make_fp16_cache(model) if fp16_set else None
+
+    caches = []
     for i, lyr in enumerate(layers):
+        if i in fp16_set:
+            caches.append(fp16_baseline[i])
+            continue
+
         attn = getattr(lyr, "self_attn", None)
         if attn is None:
             attn = getattr(lyr, "attention", getattr(lyr, "attn", None))
@@ -62,4 +92,5 @@ def make_tq_cache(
             hd = hd or hd_auto
 
         caches.append(TurboQuantKVCache(n_kv_heads=nkv, head_dim=hd, bits=bits, seed=seed + i))
+
     return caches
